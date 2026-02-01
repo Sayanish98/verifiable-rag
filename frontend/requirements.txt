@@ -1,0 +1,29 @@
+# Frontend Dependencies (Node.js/React)
+# This is for reference only. Use package.json for actual dependency management.
+# To install: npm install or yarn install
+
+# Core Framework
+react@19.2.4
+react-dom@19.2.4
+react-scripts@5.0.1
+
+# UI Components and Rendering
+react-markdown@10.1.0
+
+# HTTP Client (not currently used but available)
+axios@1.13.4
+
+# Testing Libraries
+@testing-library/react@16.3.2
+@testing-library/jest-dom@6.9.1
+@testing-library/user-event@13.5.0
+@testing-library/dom@10.4.1
+
+# Performance Monitoring
+web-vitals@2.1.4
+
+# Installation Instructions:
+# 1. Navigate to frontend directory: cd frontend
+# 2. Install dependencies: npm install
+# 3. Start development server: npm start
+# 4. Build for production: npm run build

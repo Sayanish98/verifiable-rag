@@ -1,0 +1,65 @@
+// there are 3 types of pdfs reports here.
+// 1.actual labreport wchich is captured as image and converted into pdf
+// 2. and 2 mocked pdf text format lab reports
+// The truth script below contains questions, expected behaviors, and expected truths for evaluating the system's performance on these documents.
+
+{
+  "truth_script": [
+    {
+      "id": 1,
+      "question": "What are my RBC count level in two months?",
+      "expected_behavior": "The system should ask for clarification because the phrase 'two months' is ambiguous and could refer to past data, future prediction, or general information.",
+      "expected_truth": null
+    },
+    {
+      "id": 2,
+      "question": "Yes, I am asking historical RBC count from two months ago.",
+      "expected_behavior": "The system should state that it cannot resolve relative time references and request explicit months or specific documents.",
+      "expected_truth": null
+    },
+    {
+      "id": 3,
+      "question": "It is simply RBC count level in December and November.",
+      "expected_behavior": "The system should retrieve values from the uploaded documents and provide a factual comparison.",
+      "expected_truth": {
+        "November_2025": {
+          "RBC_Count": "4.9 x10^6/uL"
+        },
+        "December_2025": {
+          "RBC_Count": "5.0 x10^6/uL"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "question": "In which month RBC count is higher?",
+      "expected_behavior": "The system should perform a numerical comparison using retrieved data.",
+      "expected_truth": {
+        "higher_month": "December 2025",
+        "reason": "RBC count in December (5.0 x10^6/uL) is higher than in November (4.9 x10^6/uL)."
+      }
+    },
+    {
+      "id": 5,
+      "question": "Retrieve RBC count, WBC count, and hemoglobin level from November and December reports and give a trend analysis.",
+      "expected_behavior": "The system should retrieve structured lab values from both documents and generate a grounded trend analysis.",
+      "expected_truth": {
+        "November_2025": {
+          "RBC_Count": "4.9 x10^6/uL",
+          "WBC_Count": "6.8 x10^3/uL",
+          "Hemoglobin": "14.2 g/dL"
+        },
+        "December_2025": {
+          "RBC_Count": "5.0 x10^6/uL",
+          "WBC_Count": "7.1 x10^3/uL",
+          "Hemoglobin": "14.0 g/dL"
+        },
+        "trend_analysis": {
+          "RBC_Count": "Increased",
+          "WBC_Count": "Increased",
+          "Hemoglobin": "Decreased"
+        }
+      }
+    }
+  ]
+}

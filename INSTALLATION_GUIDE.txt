@@ -1,0 +1,265 @@
+===============================================================================
+VERIFIABLE RAG SYSTEM - MANUAL INSTALLATION GUIDE
+===============================================================================
+
+This guide provides step-by-step instructions to manually install dependencies
+and run the Verifiable RAG application.
+
+===============================================================================
+PREREQUISITES
+===============================================================================
+
+1. Python 3.8 or higher installed
+   - Check version: python --version
+
+2. Node.js 14.x or higher installed
+   - Check version: node --version
+
+3. Tesseract-OCR installed at: C:\Program Files\Tesseract-OCR\tesseract.exe
+   - Download from: https://github.com/UB-Mannheim/tesseract/wiki
+
+4. Google Gemini API Key
+   - Get from: https://aistudio.google.com/app/apikey
+
+===============================================================================
+STEP 1: BACKEND SETUP
+===============================================================================
+
+1.1. Navigate to the backend directory:
+     cd {root}\verifiable-rag\backend
+
+1.2. Create a Python virtual environment:
+     python -m venv venv
+
+1.3. Activate the virtual environment:
+     .\venv\Scripts\activate
+
+     Note: You should see (venv) prefix in your terminal prompt
+
+1.4. Upgrade pip to the latest version:
+     python -m pip install --upgrade pip
+
+1.5. Install backend dependencies:
+     pip install -r requirements.txt
+
+     TROUBLESHOOTING - If chromadb installation fails:
+     ----------------------------------------------------------------
+     Error: "Microsoft Visual C++ 14.0 or greater is required"
+     
+     Solution Option 1 (Recommended):
+     - Install Microsoft C++ Build Tools from:
+       https://visualstudio.microsoft.com/visual-cpp-build-tools/
+     - Download "Build Tools for Visual Studio"
+     - Run installer and select "Desktop development with C++"
+     - Restart terminal and retry: pip install -r requirements.txt
+
+     Solution Option 2 (Use older chromadb version with pre-built wheels):
+     - pip install chromadb==0.4.22
+     - Then install remaining packages:
+       pip install fastapi uvicorn pydantic python-dotenv PyMuPDF pytesseract Pillow sentence-transformers google-genai
+
+     Solution Option 3 (Install dependencies individually):
+     - pip install fastapi uvicorn[standard]
+     - pip install pydantic python-dotenv
+     - pip install PyMuPDF pytesseract Pillow
+     - pip install sentence-transformers
+     - pip install google-genai
+     - pip install chromadb  (try latest version)
+     ----------------------------------------------------------------
+
+1.6. Create .env file in the backend directory:
+     - Create a new file: backend\.env
+     - Add your Gemini API key:
+       GEMINI_API_KEY=your_actual_api_key_here
+
+1.7. Verify installation:
+     python -c "import chromadb; import google.genai; print('Success!')"
+
+===============================================================================
+STEP 2: FRONTEND SETUP
+===============================================================================
+
+2.1. Open a NEW terminal window (keep backend terminal open)
+
+2.2. Navigate to the frontend directory:
+     cd {root}\verifiable-rag\frontend
+
+2.3. Install frontend dependencies:
+     npm install
+
+     Note: This will install React and all required packages from package.json
+
+2.4. Verify installation:
+     npm list react react-dom react-markdown
+
+===============================================================================
+STEP 3: RUNNING THE APPLICATION
+===============================================================================
+
+3.1. START THE BACKEND SERVER (in backend terminal):
+     ----------------------------------------------------------------
+     Terminal 1 - Backend:
+     cd {root}\verifiable-rag\backend
+     .\venv\Scripts\activate
+     uvicorn main:app --reload
+     
+     Expected output:
+     INFO:     Uvicorn running on http://127.0.0.1:8000
+     INFO:     Application startup complete.
+     
+     Backend URL: http://localhost:8000
+     API Docs: http://localhost:8000/docs
+     ----------------------------------------------------------------
+
+3.2. START THE FRONTEND SERVER (in frontend terminal):
+     ----------------------------------------------------------------
+     Terminal 2 - Frontend:
+     cd {root}\verifiable-rag\frontend
+     npm start
+     
+     Expected output:
+     Compiled successfully!
+     You can now view the app in the browser.
+     Local: http://localhost:3000
+     
+     Frontend URL: http://localhost:3000
+     ----------------------------------------------------------------
+
+3.3. Access the application:
+     - Open your browser
+     - Navigate to: http://localhost:3000
+     - The application should load with sidebar and query interface
+
+===============================================================================
+STEP 4: USING THE APPLICATION
+===============================================================================
+
+4.1. Upload Documents:
+     - Click "Upload Document" button in the sidebar
+     - Select a PDF file (medical documents recommended)
+     - Wait for "Document uploaded successfully!" notification
+
+4.2. Ask Questions:
+     - Type your question in the input box
+     - Click "Ask Question" button
+     - View AI response with evidence citations
+     - Click "View Evidence" to see source snippets
+
+4.3. Manage Documents:
+     - View all uploaded documents in the sidebar
+     - Click trash icon to delete a document
+     - Confirm deletion in the popup modal
+
+4.4. Clear Conversation:
+     - Click "Clear Chat" button in the header
+     - Confirm clearing in the popup modal
+
+===============================================================================
+STEP 5: STOPPING THE APPLICATION
+===============================================================================
+
+5.1. Stop the Frontend Server:
+     - Go to the frontend terminal
+     - Press: Ctrl + C
+     - Confirm shutdown if prompted
+
+5.2. Stop the Backend Server:
+     - Go to the backend terminal
+     - Press: Ctrl + C
+     - Confirm shutdown if prompted
+
+5.3. Deactivate Python Virtual Environment (optional):
+     deactivate
+
+===============================================================================
+TROUBLESHOOTING
+===============================================================================
+
+Problem 1: Backend won't start - "ModuleNotFoundError"
+Solution: Make sure virtual environment is activated (you should see (venv) 
+          prefix) and all dependencies are installed via pip
+
+Problem 2: Frontend won't start - "npm ERR!"
+Solution: Delete node_modules folder and package-lock.json, then run npm 
+          install again
+
+Problem 3: CORS errors in browser console
+Solution: Ensure backend is running on port 8000 and frontend on port 3000
+
+Problem 4: "Cannot find Tesseract" error
+Solution: Install Tesseract-OCR and verify path in backend/ocr.py matches 
+          your installation location
+
+Problem 5: ChromaDB installation fails
+Solution: See detailed troubleshooting in STEP 1.5 above
+
+Problem 6: API key errors
+Solution: Verify .env file exists in backend directory and contains valid 
+          GEMINI_API_KEY
+
+Problem 7: Port already in use
+Solution: 
+- For backend (port 8000): Stop any running Python processes or change port 
+  in uvicorn command: uvicorn main:app --reload --port 8001
+- For frontend (port 3000): Kill node processes or set PORT environment 
+  variable: set PORT=3001 && npm start
+
+===============================================================================
+SYSTEM ARCHITECTURE
+===============================================================================
+
+Backend Components:
+- main.py: FastAPI server with endpoints for upload, query, delete
+- rag.py: Agentic RAG pipeline with 4 agents
+  * Agent 1: Query Classification
+  * Agent 2: Multi-Entity Retrieval
+  * Agent 3: Grounding Verification
+  * Agent 4: Evidence Snippet Extraction
+- vectorstore.py: ChromaDB interface with duplicate detection
+- chunking.py: Text chunking for embeddings
+- ocr.py: Tesseract OCR for PDF text extraction
+
+Frontend Components:
+- QueryForm/: Main chat interface with conversation view
+- Sidebar/: Document upload and file management
+- Common/: Reusable components (modals)
+
+Data Storage:
+- Vector Database: backend/vector_db/ (ChromaDB)
+- Conversation History: Browser sessionStorage
+- Uploaded Files: In-memory processing only
+
+===============================================================================
+QUICK REFERENCE COMMANDS
+===============================================================================
+
+Backend (Terminal 1):
+  cd {root}\verifiable-rag\backend
+  .\venv\Scripts\activate
+  uvicorn main:app --reload
+
+Frontend (Terminal 2):
+  cd {root}\verifiable-rag\frontend
+  npm start
+
+Reinstall Dependencies:
+  Backend: pip install -r requirements.txt
+  Frontend: npm install
+
+Check Versions:
+  python --version
+  node --version
+  npm --version
+
+===============================================================================
+SUPPORT
+===============================================================================
+
+For issues not covered in this guide:
+1. Check backend terminal for Python errors
+2. Check frontend terminal for npm/React errors  
+3. Check browser console (F12) for JavaScript errors
+4. Verify all prerequisites are installed
+5. Ensure both servers are running simultaneously
+
+===============================================================================

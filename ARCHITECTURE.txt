@@ -1,0 +1,527 @@
+===============================================================================
+VERIFIABLE RAG SYSTEM – ARCHITECTURE REPORT
+===============================================================================
+
+1. OBJECTIVE
+===============================================================================
+
+The goal of this system is to build a Verifiable Retrieval-Augmented Generation 
+(RAG) application that:
+
+  • Answers medical questions strictly grounded in uploaded lab reports
+  • Handles ambiguous queries by requesting clarification
+  • Provides evidence-backed answers with document citations and text snippets
+  • Avoids hallucination when information is missing or unclear
+  • Maintains conversation context for follow-up questions
+  • Prevents duplicate document uploads
+
+This directly satisfies the requirements of truthfulness, verifiability, and 
+controlled reasoning for medical document analysis.
+
+2. HIGH-LEVEL ARCHITECTURE
+===============================================================================
+
+Frontend (React 19.2.4)
+  • Modular component architecture (14 components)
+  • Document upload interface with duplicate detection notification
+  • Chat-style query interface with conversation history
+  • Evidence viewer modal showing exact text snippets and sources
+  • Markdown rendering for structured responses
+  • Confirmation modals for destructive actions (delete file, clear chat)
+  • Session-based conversation persistence
+
+Backend (FastAPI)
+  • Agentic RAG pipeline with 4 specialized agents
+  • Document ingestion with OCR support for scanned PDFs
+  • Chunking and embedding generation
+  • Vector search with ChromaDB
+  • Answer generation with inline citations
+  • Conversation context tracking for follow-up queries
+  • Truth & ambiguity handling layer
+
+Vector Store
+  • ChromaDB (local, persistent)
+  • Stores embeddings with metadata:
+    - document_name: Exact filename for traceability
+    - page_number: Page-level citation support
+    - chunk_index: Ordering within document
+  • Duplicate document detection to prevent redundant ingestion
+  • Full delete & re-ingestion support
+  
+  Why ChromaDB?
+    - Persistent local storage (no cloud dependencies)
+    - Simple API for medical document scale
+    - Reproducible results across sessions
+
+LLM Layer
+  • Google Gemini API (gemini-2.5-flash)
+  • Free-tier API usage
+  • Never invoked without verified retrieval
+  • Strictly constrained to retrieved content
+  
+  Critical Design Principle:
+    The LLM is treated as a controlled reasoning engine, not a knowledge source.
+    It synthesizes retrieved facts—it does NOT inject external knowledge.
+
+OCR Layer
+  • PyMuPDF (fitz) for text-based PDFs (preferred)
+  • Tesseract-OCR for scanned or image-based documents (fallback)
+  • Page-level extraction for accurate citation
+  
+  Why page-level extraction?
+    - Enables precise source attribution ("Page 2")
+    - Maintains document structure for context
+    - Supports evidence traceability
+
+3. CORE DATA FLOW
+===============================================================================
+
+UPLOAD PHASE (Document Processing Pipeline)
+-------------------------------------------------------------------------------
+Goal: Convert raw PDFs into verifiable, searchable medical facts.
+
+Process Flow:
+  1. User uploads PDF(s) via sidebar upload button
+  2. Backend checks for duplicate filenames
+     • If duplicate → file is skipped (user notified)
+     • If new → proceed to extraction
+  3. Text extraction:
+     • PyMuPDF extracts text (preferred for speed and accuracy)
+     • Tesseract OCR fallback used only when necessary
+  4. Text is chunked:
+     • 500 characters per chunk
+     • 50-character overlap between chunks
+  5. Embeddings generated:
+     • sentence-transformers (all-MiniLM-L6-v2)
+     • 384-dimensional vectors
+     • Chosen for speed, reliability, and local execution
+  6. Stored in ChromaDB with full metadata:
+     • document_name, page_number, chunk_index
+  7. Success notification displayed in UI
+
+Why this design?
+  • Chunking preserves semantic coherence
+  • Overlap prevents data loss across chunk boundaries
+  • Local embeddings ensure reproducibility (no API variance)
+  • Metadata enables exact evidence tracing
+  • Duplicate detection prevents confusion and wasted storage
+
+QUERY PHASE – AGENT 1: QUERY CLASSIFICATION
+-------------------------------------------------------------------------------
+Primary Goal: Reduce ambiguity before retrieval.
+
+Responsibilities:
+  • Identify query intent:
+    - Simple lookup ("What is my RBC count?")
+    - Comparison ("RBC in November vs December")
+    - Trend analysis ("Trend for WBC and hemoglobin")
+    - Document-level ("How many reports uploaded?")
+  • Detect ambiguity:
+    - Relative time references ("two months ago")
+    - Missing entities or unclear pronouns
+    - Vague phrasing
+  • Extract medical entities:
+    - Lab values: RBC, WBC, Hemoglobin, Platelets, etc.
+    - Time references: Month names, explicit dates
+    - Document references: "November report", "all files"
+
+Process Flow:
+  1. User asks a question via chat interface
+  2. System analyzes query type and entities
+  3. Checks for ambiguity:
+     • Relative time ("two months ago") → clarification requested
+     • Missing context → clarification requested
+     • Medical terms (RBC, WBC, hemoglobin) → processed as clear
+  4. Extracts key entities for retrieval (e.g., ["RBC", "November", "December"])
+  5. If ambiguous → returns clarification question to user
+  6. If clear → proceeds to retrieval phase
+
+Critical Design Decision:
+  Instead of guessing user intent, the system forces clarity.
+  This may temporarily slow the user, but prevents dangerous assumptions
+  in medical contexts where precision is non-negotiable.
+
+RETRIEVAL PHASE – AGENT 2: MULTI-ENTITY RETRIEVAL
+-------------------------------------------------------------------------------
+Primary Goal: Ensure full coverage of all referenced entities.
+
+Responsibilities:
+  • Perform per-entity vector searches
+  • Retrieve top-K chunks per entity (default: 5)
+  • Deduplicate overlapping chunks across entities
+  • Detect absence of relevant data
+
+Process Flow:
+  1. For each entity identified by Agent 1:
+     • Execute semantic similarity search in ChromaDB
+     • Retrieve top-5 most relevant chunks
+  2. Combine all chunks from all entities
+  3. Deduplicate chunks that appear in multiple entity results
+  4. If no relevant chunks found → "information not found" response
+  5. Return combined context with source metadata:
+     • document_name, page_number, chunk_text
+
+Why per-entity retrieval?
+  • Medical questions often involve comparisons ("RBC in Nov vs Dec")
+  • Single-pass retrieval can miss key values for secondary entities
+  • Entity-based retrieval increases recall without hallucination risk
+  • Example: Query "Compare RBC and WBC" retrieves chunks for BOTH values
+
+Design Trade-off:
+  Slightly slower due to multiple searches, but guarantees comprehensive coverage.
+
+GROUNDING PHASE – AGENT 3: GROUNDING VERIFICATION
+-------------------------------------------------------------------------------
+Primary Goal: Decide whether answering is even allowed.
+
+Responsibilities:
+  • Verify sufficiency of retrieved context
+  • Block answer generation if verification fails
+  • Prevent speculative or extrapolated responses
+
+Verification Checks:
+  • Are all required entities present in chunks?
+  • Are numerical values available for comparisons?
+  • Is comparison logically possible from the data?
+  • Is temporal context sufficient (e.g., specific months)?
+  • Is document attribution clear?
+
+Process Flow:
+  1. Receives question + retrieved chunks from Agent 2
+  2. Analyzes each chunk for required information
+  3. Counts how many entities are covered
+  4. Returns verification decision:
+     • CAN_ANSWER: chunks contain all needed information
+     • CANNOT_ANSWER: chunks lack critical data
+     • NEED_MORE_CONTEXT: chunks are partially relevant
+  5. If cannot answer → system returns:
+     "I cannot find this information in your uploaded documents."
+
+Critical Design Principle:
+  If verification fails, the system REFUSES to answer.
+  This is intentional and non-negotiable for medical use.
+  Better to say "I don't know" than to guess incorrectly.
+
+ANSWER PHASE – AGENT 4: EVIDENCE-ALIGNED RESPONSE
+-------------------------------------------------------------------------------
+Primary Goal: Deliver a response that is provably correct.
+
+LLM Input (Strictly Controlled):
+  • Verified chunks only (from Agent 3)
+  • Last 3 conversation turns (for context continuity)
+  • Explicit instruction:
+    "Do not guess. Do not infer beyond provided text.
+     Only state facts present in the retrieved chunks."
+
+Generation Process:
+  1. LLM synthesizes answer from verified chunks
+  2. Formats response with:
+     • Markdown structure (bold, lists, tables)
+     • Direct response to question
+     • Inline citations (e.g., "According to [Document Name]")
+  3. Evidence snippet extraction:
+     • Identifies exact text snippets supporting each claim
+     • Extracts minimal necessary context (1-3 sentences)
+     • Maps each snippet to source document and page number
+  4. Output structure:
+     • Structured markdown answer
+     • Evidence array:
+       - document_name: Exact filename
+       - page_number: Specific page
+       - snippet: Exact quoted text from document
+
+Frontend Rendering:
+  • Answer displayed in chat bubble with markdown rendering
+  • "View Evidence" button with count badge (e.g., "View Evidence (3)")
+  • Click opens modal popup showing:
+    - All evidence snippets
+    - Source attribution (document + page)
+    - Scrollable list for multiple sources
+
+Why this design?
+  • User can verify every claim against original text
+  • No "black box" reasoning—full transparency
+  • Evidence snippets are minimal (not full chunks) for readability
+  • Citations enable rapid fact-checking
+
+4. AGENTIC ARCHITECTURE & TRUTHFULNESS CONTROLS
+===============================================================================
+
+This system deliberately prioritizes truthfulness over user convenience.
+
+KEY BEHAVIORAL GUARANTEES
+-------------------------------------------------------------------------------
+✓ No-answer-on-missing-data
+  If documents don't contain the requested information → explicitly refuses
+  
+✓ Clarification-before-execution
+  Ambiguous queries are rejected until user provides specific entities
+  
+✓ Verification-before-generation
+  Agent 3 must approve before LLM generates any response
+  
+✓ Exact snippet-based citations
+  Every factual claim is mapped to quoted source text
+  
+✓ Controlled conversation memory
+  Only last 3 Q&A exchanges retained to prevent context drift
+
+AGENT PIPELINE BREAKDOWN
+-------------------------------------------------------------------------------
+
+AGENT 1: QUERY CLASSIFICATION (rag.py: classify_query)
+  Purpose: Understand user intent and extract search entities
+  
+  Controls:
+    • Detects ambiguous temporal references ("two months ago")
+    • Rejects vague queries until clarified
+    • Identifies medical terms as clear entities (RBC, WBC, etc.)
+    • Recognizes document-count queries ("all files", "3 reports")
+  
+  Output: Query type, entities list, clarification if needed
+  
+  Design Philosophy:
+    Force clarity before execution. Medical queries cannot tolerate ambiguity.
+
+AGENT 2: MULTI-ENTITY RETRIEVAL (rag.py: retrieve_context)
+  Purpose: Fetch relevant chunks for all identified entities
+  
+  Controls:
+    • Per-entity vector search for comprehensive coverage
+    • Deduplication to avoid redundant context
+    • Returns empty if no relevant chunks found
+  
+  Output: Combined chunks with source metadata
+  
+  Design Philosophy:
+    Comparisons require coverage of ALL entities. Single-pass retrieval
+    risks missing critical values (e.g., "November RBC" vs "December RBC").
+
+AGENT 3: GROUNDING VERIFICATION (rag.py: verify_grounding)
+  Purpose: Validate that retrieved context can answer the question
+  
+  Controls:
+    • Explicit verification before generation
+    • Blocks answer generation if context is insufficient
+    • Prevents speculative or extrapolated responses
+  
+  Output: CAN_ANSWER | CANNOT_ANSWER | NEED_MORE_CONTEXT
+  
+  Design Philosophy:
+    If verification fails, refuse to answer. Better "I don't know" than
+    a plausible-sounding hallucination.
+
+AGENT 4: EVIDENCE SNIPPET EXTRACTION (rag.py: retrieve_and_answer)
+  Purpose: Generate answer with exact evidence snippets
+  
+  Controls:
+    • LLM constrained to use only retrieved chunks
+    • Extracts minimal quoted snippets (not full chunks)
+    • Every factual claim mapped to source evidence
+    • Conversation context limited to last 3 exchanges
+  
+  Output: Structured answer + evidence array
+  
+  Design Philosophy:
+    The LLM is a synthesis engine, not an oracle. It combines retrieved
+    facts—it does NOT add external medical knowledge.
+
+USER EXPERIENCE TRADE-OFF (INTENTIONAL)
+-------------------------------------------------------------------------------
+Yes, users may feel momentarily frustrated by:
+  • Clarification questions that seem obvious
+  • Refusals to answer when data is incomplete
+  • Strict phrasing requirements
+
+However, this is intentional risk reduction for medical contexts.
+
+To minimize frustration while maintaining safety:
+  • Clarifications are short and specific (not vague "please elaborate")
+  • Follow-up questions reuse context intelligently
+  • Once clarified, responses are fast and precise
+  • Evidence is always shown, building user trust over time
+
+EVALUATION SCENARIOS (truth_script.txt)
+-------------------------------------------------------------------------------
+The system's behavior is validated against 5 test scenarios:
+
+  Scenario 1: "RBC count in two months"
+    Expected: Asks for clarification (ambiguous time reference)
+    Demonstrates: Agent 1 ambiguity detection
+
+  Scenario 2: "Historical RBC from two months ago"
+    Expected: Rejects relative time, requests explicit months
+    Demonstrates: Agent 1 refuses to guess dates
+
+  Scenario 3: "RBC in December and November"
+    Expected: Retrieves exact values from both documents
+    Demonstrates: Agent 2 multi-entity retrieval
+
+  Scenario 4: "Which month is higher?"
+    Expected: Numerical comparison using retrieved data
+    Demonstrates: Agent 4 synthesis without external inference
+
+  Scenario 5: "Trend analysis for RBC, WBC, hemoglobin"
+    Expected: Multi-entity retrieval with structured output
+    Demonstrates: Full 4-agent pipeline with verification
+
+5. TECHNOLOGIES USED (ALL FREE / OPEN SOURCE)
+===============================================================================
+
+Layer                Technology                 Reason
+-------------------------------------------------------------------------------
+Frontend             React 19.2.4               Lightweight, fast, modular
+UI Components        14 modular components      Maintainability, single 
+                                                responsibility principle
+Markdown Rendering   react-markdown 10.1.0      Structured response display
+State Management     sessionStorage             Conversation persistence without
+                                                backend complexity
+Styling              CSS with modals            Professional chat interface,
+                                                no framework overhead
+
+Backend              FastAPI                    Async, predictable, minimal,
+                                                auto-generated docs
+Embeddings           sentence-transformers      Local execution, reproducible,
+                     (all-MiniLM-L6-v2)         384-dim vectors, no API cost
+Vector DB            ChromaDB 0.4.x-0.5.x       Persistent local storage,
+                                                no cloud dependencies
+LLM                  Google Gemini API          Fast, free-tier, 30K token
+                     (gemini-2.5-flash)         context window
+PDF Processing       PyMuPDF (fitz)             Accurate text extraction,
+                                                preserves structure
+OCR                  Tesseract-OCR              Scanned document support,
+                                                free, battle-tested
+Env Management       python-dotenv              Secure local config, never
+                                                exposed to frontend
+
+Development          PowerShell scripts         Automated setup and launch
+Documentation        TXT format                 Installation guide, architecture
+
+6. SECURITY & API KEY HANDLING
+===============================================================================
+
+API Key Protection:
+  • API keys stored in backend/.env file (never in frontend code)
+  • Backend acts as secure proxy for all LLM requests
+  • CORS restricted to localhost:3000 (frontend origin only)
+  • Deployment uses platform environment variables
+  • .env file excluded from version control (.gitignore)
+  • No API keys hardcoded anywhere in source code
+
+Data Privacy (Critical for Medical Use):
+  • All processing happens locally or on controlled backend
+  • Medical data never sent to third parties (except Gemini API for reasoning)
+  • Vector database stored on local disk (no cloud upload)
+  • No telemetry or analytics tracking
+  • User conversations stored in browser sessionStorage only
+    (cleared on browser close)
+
+This architecture aligns with privacy-first medical tooling principles.
+API keys are protected, and sensitive medical data never leaves the
+user's control beyond the minimal LLM API calls.
+
+7. FRONTEND ARCHITECTURE
+===============================================================================
+
+COMPONENT STRUCTURE (14 COMPONENTS):
+  src/
+    App.js                           Main application container
+    components/
+      common/
+        ConfirmModal.js              Reusable confirmation dialog
+      QueryForm/
+        index.js                     Main chat container (~160 lines)
+        Header.js                    Title + clear chat button
+        EmptyState.js                No documents placeholder
+        InitialInput.js              First question input field
+        EvidenceModal.js             Evidence sources popup
+        ConversationView/
+          index.js                   Conversation container
+          MessageBubble.js           User/AI message rendering
+          EvidenceButton.js          View evidence button + badge
+      Sidebar/
+        index.js                     Main sidebar container (~130 lines)
+        UploadButton.js              File upload component
+        FileList/
+          index.js                   File list container
+          FileItem.js                Individual file row + delete
+        UploadNotification.js        Success notification toast
+
+DESIGN PRINCIPLES:
+  • Single Responsibility: Each component has one clear purpose
+  • Reusability: ConfirmModal used by both QueryForm and Sidebar
+  • Modularity: Easy to modify individual features without side effects
+  • State Management: Lifted state to containers (QueryForm, Sidebar)
+  • Styling: CSS with z-index layering for modals and notifications
+
+KEY FEATURES:
+  • Auto-upload on file selection (no separate upload button click)
+  • Delete confirmation modal with backdrop blur
+  • Clear chat confirmation modal
+  • Evidence modal with scrollable snippet list
+  • Upload success notification (auto-dismiss after 3s)
+  • Markdown rendering with code blocks and lists
+  • Conversation history persisted in sessionStorage
+  • Responsive layout with fixed sidebar (330px) and main area
+
+8. WHY THIS ARCHITECTURE IS TRUSTWORTHY
+===============================================================================
+
+✅ Designed for medical correctness, not user convenience
+   The system will refuse to answer rather than guess.
+
+✅ Hallucination-resistant by construction
+   4-agent verification pipeline with explicit grounding checks.
+
+✅ Explicit refusal when certainty is not possible
+   "I cannot find this information" is a valid, expected response.
+
+✅ Evidence always visible to the user
+   Every claim is backed by exact quoted snippets with page numbers.
+
+✅ Local execution preserves data privacy
+   Medical data stays on user's machine (except minimal LLM API calls).
+
+✅ Fully auditable reasoning path
+   Query → Classification → Retrieval → Verification → Answer
+   Each step logged and traceable.
+
+✅ Conversation context without context drift
+   Last 3 exchanges retained, preventing memory-based hallucinations.
+
+✅ Reproducible with free, open-source tools
+   Gemini API (free tier), ChromaDB (local), React (open source).
+
+✅ Modular architecture for maintainability
+   14 frontend components, 4 backend agents, clear separation of concerns.
+
+✅ Professional UX with safety guardrails
+   Confirmation modals, duplicate detection, markdown rendering, 
+   evidence viewer.
+
+9. SYSTEM METRICS & SCALABILITY
+===============================================================================
+
+PERFORMANCE:
+  • Chunk size: 500 characters, 50 overlap
+  • Embedding dimension: 384 (all-MiniLM-L6-v2)
+  • Retrieval: Top-5 chunks per entity
+  • Conversation context: Last 3 Q&A exchanges
+  • LLM response time: ~2-4 seconds (Gemini Flash)
+  • Upload processing: ~5-10 seconds per multi-page PDF
+
+SCALABILITY:
+  • Documents: Tested with 10+ lab reports
+  • Queries: No rate limiting on backend (Gemini API limits apply)
+  • Storage: ChromaDB handles 10,000+ documents on local disk
+  • Concurrent users: FastAPI supports async requests
+
+LIMITATIONS:
+  • Relative time references require clarification (by design)
+  • LLM context window: ~30,000 tokens (Gemini 2.5 Flash)
+  • OCR accuracy depends on scan quality
+  • ChromaDB requires disk persistence (not in-memory only)
+
+===============================================================================
+END OF ARCHITECTURE REPORT
+===============================================================================
