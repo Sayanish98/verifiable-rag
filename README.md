@@ -61,7 +61,7 @@ Tool Registry
 Data Layer
     |
     +--> MongoDB: metadata, conversations, checkpoints
-    +--> Redis: query cache
+    +--> Redis: query cache and Celery broker
     +--> ChromaDB: vector embeddings
     +--> Local storage: temporary uploads and persisted vector DB
 
@@ -156,6 +156,7 @@ verifiable-rag/
 
 - MongoDB for document metadata and LangGraph checkpoints
 - Redis for best-effort query caching
+- Celery workers for durable document ingestion
 - ChromaDB for vector embeddings
 - Local filesystem for upload staging and vector persistence
 
@@ -194,6 +195,7 @@ docker compose up --build
 This starts:
 
 - FastAPI backend
+- Celery ingestion worker
 - React frontend
 - MongoDB
 - Redis
@@ -239,6 +241,9 @@ The root `docker-compose.yml` reads environment variables from `.env`.
 | `MONGODB_URL` | No in Docker | `mongodb://mongo:27017` | MongoDB connection string |
 | `MONGODB_DATABASE` | No | `verifiable_rag` | Main Mongo database name |
 | `REDIS_URL` | No in Docker | `redis://redis:6379/0` | Redis connection string |
+| `CELERY_BROKER_URL` | No in Docker | `redis://redis:6379/0` | Celery task broker |
+| `CELERY_RESULT_BACKEND` | No in Docker | `redis://redis:6379/1` | Celery job status/result backend |
+| `USE_CELERY_INGESTION` | No | `true` in Docker | Enqueue uploads through Celery instead of local task fallback |
 | `LANGGRAPH_CHECKPOINTER` | No | `mongo` in Docker, `memory` in settings | Checkpoint backend |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | `http://otel-collector:4317` in Docker | OTEL trace export endpoint |
 | `LANGFUSE_PUBLIC_KEY` | No | None | Enables Langfuse traces when paired with secret key |
@@ -283,7 +288,7 @@ Routes are intentionally thin. They validate request bodies, get services throug
 
 Services live in `backend/app/services`.
 
-- `DocumentService`: accepts uploads, computes checksums, creates metadata, starts ingestion
+- `DocumentService`: accepts uploads, computes checksums, creates metadata, enqueues ingestion
 - `QueryService`: handles query cache, request validation, LangGraph execution, streaming, resume, and state inspection
 - `EvaluationService`: runs golden dataset evaluation cases
 - `EmbeddingService`: marks the embedding provider boundary for future provider swaps
@@ -341,8 +346,16 @@ Integrations live in `backend/app/integrations`.
 Workers live in `backend/app/workers`.
 
 - `IngestionWorker`: parses PDFs, chunks text, embeds chunks, writes vectors, updates document status
+- `celery_app.py`: Celery application configured with Redis broker/result backend
+- `tasks.py`: Celery task entry point for durable document ingestion
 
-The worker currently runs as an async background task. The architecture is ready to move this behind Celery or another queue if needed.
+In Docker, uploads use the full queue path:
+
+```text
+FastAPI -> Mongo PENDING -> Redis broker -> Celery worker -> Mongo READY/FAILED
+```
+
+For manual local development, `USE_CELERY_INGESTION=false` keeps an in-process async fallback available.
 
 ## Document Ingestion Flow
 
@@ -356,7 +369,13 @@ DocumentService
     +--> insert Mongo metadata with status PENDING
     +--> unique checksum index prevents duplicate content race conditions
     +--> save temporary upload
-    +--> start background ingestion task
+    +--> enqueue Celery ingestion task with job ID
+    |
+    v
+Redis broker
+    |
+    v
+Celery Worker
     |
     v
 IngestionWorker
@@ -374,6 +393,7 @@ Failure behavior:
 - PDF parsing failure -> document status `FAILED`
 - OCR failure -> document status `FAILED`
 - embedding/vector write failure -> document status `FAILED`
+- Celery task crash -> retry with exponential backoff, then `FAILED`
 - partial ingestion does not mark document `READY`
 
 Document statuses:
@@ -382,6 +402,26 @@ Document statuses:
 - `PROCESSING`
 - `READY`
 - `FAILED`
+
+The upload response includes an `ingestion_job_id`, which can be checked through:
+
+```http
+GET /api/v1/documents/jobs/{job_id}
+```
+
+Recent ready documents use a concrete Mongo access pattern:
+
+```text
+find({"status": "READY"}).sort("created_at", -1).limit(20)
+```
+
+That query is backed by this compound index:
+
+```python
+await documents.create_index([("status", 1), ("created_at", -1)])
+```
+
+The point of this index is not "add indexes everywhere." It supports a specific read path: listing recent documents that are ready to query without scanning the whole collection.
 
 ## Query Flow
 
@@ -548,8 +588,9 @@ Response:
   "filename": "lab-report.pdf",
   "checksum": "sha256...",
   "status": "PENDING",
+  "ingestion_job_id": "ingest_...",
   "request_id": "req_...",
-  "message": "Document accepted for background ingestion"
+  "message": "Document accepted and queued for Celery ingestion"
 }
 ```
 
@@ -563,6 +604,42 @@ GET /api/v1/documents
 
 ```http
 GET /api/v1/documents/{document_id}
+```
+
+### List Recent Ready Documents
+
+```http
+GET /api/v1/documents/recent-ready?limit=20
+```
+
+This endpoint demonstrates a real MongoDB query/index story:
+
+- filter by `status`
+- sort by `created_at`
+- limit the result set
+- support the query with a compound index
+
+### Check Ingestion Job
+
+```http
+GET /api/v1/documents/jobs/{job_id}
+```
+
+Response:
+
+```json
+{
+  "job_id": "ingest_...",
+  "status": "SUCCESS",
+  "ready": true,
+  "successful": true,
+  "failed": false,
+  "result": {
+    "document_id": "document-uuid",
+    "status": "READY",
+    "retry_count": 0
+  }
+}
 ```
 
 ### Delete Document By Name
@@ -782,6 +859,12 @@ Current examples:
 - tool registry invocation
 - LLM structured output contract
 - health endpoint integration
+- malformed LLM structured output
+- Redis unavailable graceful degradation
+- Mongo duplicate insert mapping
+- ingestion failure marking documents `FAILED`
+- weak-evidence graph retry to safe response
+- human-review graph interruption
 
 Run backend tests locally:
 
@@ -822,7 +905,16 @@ npm install
 npm start
 ```
 
-Manual mode requires your own MongoDB and Redis if you want persistent metadata, Redis cache, and Mongo-backed LangGraph checkpoints. Without those services, parts of the backend degrade to memory/no-cache behavior where implemented.
+Manual mode requires your own MongoDB and Redis if you want persistent metadata, Redis cache, Celery ingestion, and Mongo-backed LangGraph checkpoints. Without those services, parts of the backend degrade to memory/no-cache behavior where implemented.
+
+To use the local in-process ingestion fallback while developing manually:
+
+```powershell
+Set-Content -Path backend\.env -Value @"
+GEMINI_API_KEY=your_new_gemini_api_key_here
+USE_CELERY_INGESTION=false
+"@
+```
 
 ## Docker Services
 
@@ -832,8 +924,9 @@ The root `docker-compose.yml` defines:
 | --- | --- | --- |
 | `frontend` | `3000` | React UI |
 | `api` | `8000` | FastAPI backend |
+| `worker` | none | Celery document ingestion worker |
 | `mongo` | `27017` | Metadata and LangGraph checkpoints |
-| `redis` | `6379` | Query cache |
+| `redis` | `6379` | Query cache, Celery broker, Celery result backend |
 | `prometheus` | `9090` | Metrics scraping |
 | `otel-collector` | `4317`, `4318` | Trace collection |
 | `tempo` | `3200` | Trace backend |
@@ -953,8 +1046,10 @@ This project demonstrates:
 - typed API contracts with Pydantic
 - route/service/repository boundaries
 - background document ingestion
+- Celery, Redis, and background worker architecture
+- job IDs, retry policy, and failed ingestion status
 - content-hash duplicate protection with a database uniqueness guarantee
-- MongoDB schema and indexing concepts
+- MongoDB schema and indexing concepts tied to access patterns
 - Redis graceful degradation
 - Chroma vector retrieval
 - structured LLM output validation
@@ -981,7 +1076,6 @@ Useful next steps:
 
 - add authentication and user-level document isolation
 - add real rate limiting middleware
-- add Celery or RQ for durable ingestion jobs
 - add idempotency-key storage for uploads
 - add automated Grafana datasource and dashboard provisioning
 - add Langfuse self-host service to Compose
@@ -992,4 +1086,3 @@ Useful next steps:
 - add end-to-end browser tests
 
 At this point, avoid adding more tools just for breadth. The most valuable improvements are hardening the pieces already present.
-

@@ -16,6 +16,7 @@ class DocumentMetadata(BaseModel):
     filename: str
     checksum: str
     status: DocumentStatus
+    ingestion_job_id: str | None = None
     chunk_count: int = 0
     page_count: int = 0
     error_code: str | None = None
@@ -28,8 +29,18 @@ class UploadDocumentResponse(BaseModel):
     filename: str
     checksum: str
     status: DocumentStatus
+    ingestion_job_id: str | None = None
     request_id: str
     message: str
+
+
+class IngestionJobResponse(BaseModel):
+    job_id: str
+    status: str
+    ready: bool = False
+    successful: bool | None = None
+    failed: bool | None = None
+    result: dict | None = None
 
 
 class DeleteDocumentRequest(BaseModel):
@@ -40,4 +51,3 @@ class DeleteDocumentResponse(BaseModel):
     message: str
     deleted_chunks: int
     request_id: str
-

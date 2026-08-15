@@ -5,6 +5,8 @@ from app.schemas.document import (
     DeleteDocumentRequest,
     DeleteDocumentResponse,
     DocumentMetadata,
+    DocumentStatus,
+    IngestionJobResponse,
     UploadDocumentResponse,
 )
 from app.services.document_service import DocumentService
@@ -28,8 +30,22 @@ async def upload_document(
 
 
 @router.get("", response_model=list[DocumentMetadata])
-async def list_documents(service: DocumentService = Depends(get_document_service)):
-    return await service.list()
+async def list_documents(
+    status: DocumentStatus | None = None,
+    limit: int = 50,
+    service: DocumentService = Depends(get_document_service),
+):
+    return await service.list(status=status, limit=limit)
+
+
+@router.get("/recent-ready", response_model=list[DocumentMetadata])
+async def list_recent_ready_documents(limit: int = 20, service: DocumentService = Depends(get_document_service)):
+    return await service.list_recent_ready(limit=limit)
+
+
+@router.get("/jobs/{job_id}", response_model=IngestionJobResponse)
+async def get_ingestion_job(job_id: str, service: DocumentService = Depends(get_document_service)):
+    return await service.get_ingestion_job(job_id)
 
 
 @router.get("/{document_id}", response_model=DocumentMetadata)
@@ -53,4 +69,3 @@ async def delete_document(
         deleted_chunks=deleted,
         request_id=request.state.request_id,
     )
-

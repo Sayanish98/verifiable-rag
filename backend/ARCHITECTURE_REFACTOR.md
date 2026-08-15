@@ -11,6 +11,8 @@ route -> service -> agent/tool -> repository -> infrastructure
 - `GET /api/v1/health`
 - `POST /api/v1/documents`
 - `GET /api/v1/documents`
+- `GET /api/v1/documents/recent-ready`
+- `GET /api/v1/documents/jobs/{job_id}`
 - `GET /api/v1/documents/{document_id}`
 - `DELETE /api/v1/documents`
 - `POST /api/v1/queries`
@@ -28,11 +30,30 @@ The original React-compatible endpoints still exist:
 
 ## Data Responsibilities
 
-- MongoDB stores document metadata, conversations, messages, AI runs, and evaluations.
+- MongoDB stores document metadata, conversations, messages, AI runs, evaluations, and LangGraph checkpoints.
 - Chroma stores embeddings and retrieval metadata.
-- Redis is used as a best-effort query cache. If Redis is unavailable, queries continue without cache.
+- Redis is used as a best-effort query cache and as the Celery broker/result backend.
+- Celery workers perform durable PDF ingestion outside the FastAPI process.
 
 Document uploads now use SHA-256 checksums and a unique MongoDB index instead of filename-only duplicate checks.
+Recent ready document listing uses `{"status": "READY"}` sorted by `created_at DESC`, backed by
+`[("status", 1), ("created_at", -1)]`.
+
+## Ingestion Workflow
+
+```text
+POST /documents
+  -> FastAPI
+  -> Mongo document status=PENDING
+  -> Redis broker
+  -> Celery worker
+  -> parse/OCR/chunk/embed
+  -> Chroma upsert
+  -> Mongo status=READY or FAILED
+```
+
+The upload response includes `ingestion_job_id`, and `GET /api/v1/documents/jobs/{job_id}` exposes Celery job status.
+Celery tasks use late acknowledgement, queue isolation, and bounded retries.
 
 ## LangGraph Agent Workflow
 

@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     mongodb_url: str | None = Field(default=None, alias="MONGODB_URL")
     mongodb_database: str = Field(default="verifiable_rag", alias="MONGODB_DATABASE")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
+    celery_broker_url: str | None = Field(default=None, alias="CELERY_BROKER_URL")
+    celery_result_backend: str | None = Field(default=None, alias="CELERY_RESULT_BACKEND")
+    use_celery_ingestion: bool = Field(default=False, alias="USE_CELERY_INGESTION")
     query_cache_ttl_seconds: int = 300
     llm_timeout_seconds: float = 30.0
     llm_max_retries: int = 2

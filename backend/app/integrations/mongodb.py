@@ -15,9 +15,9 @@ async def create_mongodb(settings: Settings) -> AsyncIOMotorDatabase | None:
         return None
     database = client[settings.mongodb_database]
     await database.documents.create_index([("checksum", 1)], unique=True)
+    await database.documents.create_index([("status", 1), ("created_at", -1)])
     await database.conversations.create_index([("user_id", 1), ("updated_at", -1)])
     await database.messages.create_index([("conversation_id", 1), ("created_at", 1)])
     await database.ai_runs.create_index([("request_id", 1)], unique=True)
     await database.evaluations.create_index([("created_at", -1)])
     return database
-

@@ -7,6 +7,9 @@ services:
       MONGODB_URL: mongodb://mongo:27017
       MONGODB_DATABASE: verifiable_rag
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      USE_CELERY_INGESTION: "true"
       LANGGRAPH_CHECKPOINTER: mongo
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -17,6 +20,24 @@ services:
       - mongo
       - redis
       - otel-collector
+
+  worker:
+    build: .
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=INFO --queues=document_ingestion --concurrency=1
+    environment:
+      MONGODB_URL: mongodb://mongo:27017
+      MONGODB_DATABASE: verifiable_rag
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      LANGGRAPH_CHECKPOINTER: mongo
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - ./vector_db:/app/vector_db
+      - ./uploads:/app/uploads
+    depends_on:
+      - mongo
+      - redis
 
   mongo:
     image: mongo:7

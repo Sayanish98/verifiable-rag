@@ -13,13 +13,14 @@ class DocumentRepository:
         self._memory: dict[str, DocumentMetadata] = {}
         self._checksum_index: dict[str, str] = {}
 
-    async def create_pending(self, filename: str, checksum: str) -> DocumentMetadata:
+    async def create_pending(self, filename: str, checksum: str, ingestion_job_id: str | None = None) -> DocumentMetadata:
         now = datetime.now(timezone.utc)
         document = DocumentMetadata(
             id=str(uuid4()),
             filename=filename,
             checksum=checksum,
             status=DocumentStatus.pending,
+            ingestion_job_id=ingestion_job_id,
             created_at=now,
             updated_at=now,
         )
@@ -37,6 +38,7 @@ class DocumentRepository:
                     "filename": filename,
                     "checksum": checksum,
                     "status": document.status,
+                    "ingestion_job_id": ingestion_job_id,
                     "chunk_count": 0,
                     "page_count": 0,
                     "error_code": None,
@@ -54,11 +56,16 @@ class DocumentRepository:
         raw = await self.database.documents.find_one({"_id": document_id})
         return _document_from_mongo(raw) if raw else None
 
-    async def list(self) -> list[DocumentMetadata]:
+    async def list(self, status: DocumentStatus | None = None, limit: int = 50) -> list[DocumentMetadata]:
+        query = {"status": status} if status else {}
         if self.database is None:
-            return list(self._memory.values())
-        cursor = self.database.documents.find({}).sort("created_at", -1)
+            documents = [doc for doc in self._memory.values() if status is None or doc.status == status]
+            return sorted(documents, key=lambda doc: doc.created_at, reverse=True)[:limit]
+        cursor = self.database.documents.find(query).sort("created_at", -1).limit(limit)
         return [_document_from_mongo(raw) async for raw in cursor]
+
+    async def list_recent_ready(self, limit: int = 20) -> list[DocumentMetadata]:
+        return await self.list(DocumentStatus.ready, limit=limit)
 
     async def update_status(
         self,
@@ -96,10 +103,10 @@ def _document_from_mongo(raw: dict) -> DocumentMetadata:
         filename=raw["filename"],
         checksum=raw["checksum"],
         status=raw["status"],
+        ingestion_job_id=raw.get("ingestion_job_id"),
         chunk_count=raw.get("chunk_count", 0),
         page_count=raw.get("page_count", 0),
         error_code=raw.get("error_code"),
         created_at=raw["created_at"],
         updated_at=raw["updated_at"],
     )
-
