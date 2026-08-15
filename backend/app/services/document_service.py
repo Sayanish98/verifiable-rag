@@ -6,9 +6,10 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from app.core.config import Settings
+from app.core.exceptions import QueueUnavailableError
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.vector_repository import VectorRepository
-from app.schemas.document import DocumentMetadata, UploadDocumentResponse
+from app.schemas.document import DocumentMetadata, DocumentStatus, UploadDocumentResponse
 from app.workers.ingestion_worker import IngestionWorker
 
 
@@ -31,7 +32,12 @@ class DocumentService:
         await asyncio.to_thread(path.write_bytes, contents)
 
         if self.settings.use_celery_ingestion:
-            await self._enqueue_celery_ingestion(document.id, file.filename, path, ingestion_job_id)
+            try:
+                await self._enqueue_celery_ingestion(document.id, file.filename, path, ingestion_job_id)
+            except Exception as exc:
+                await self.documents.update_status(document.id, DocumentStatus.failed, error_code="ENQUEUE_FAILED")
+                await asyncio.to_thread(lambda: path.unlink(missing_ok=True))
+                raise QueueUnavailableError(str(exc)) from exc
             message = "Document accepted and queued for Celery ingestion"
         else:
             asyncio.create_task(self.worker.ingest(document.id, file.filename, path))

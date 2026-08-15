@@ -22,3 +22,7 @@ class InvalidLLMResponseError(AppError):
     def __init__(self, message: str = "LLM returned invalid structured output"):
         super().__init__("INVALID_LLM_RESPONSE", message, 502)
 
+
+class QueueUnavailableError(AppError):
+    def __init__(self, message: str = "Document ingestion queue is unavailable"):
+        super().__init__("INGESTION_QUEUE_UNAVAILABLE", message, 503)

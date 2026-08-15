@@ -243,7 +243,7 @@ The root `docker-compose.yml` reads environment variables from `.env`.
 | `REDIS_URL` | No in Docker | `redis://redis:6379/0` | Redis connection string |
 | `CELERY_BROKER_URL` | No in Docker | `redis://redis:6379/0` | Celery task broker |
 | `CELERY_RESULT_BACKEND` | No in Docker | `redis://redis:6379/1` | Celery job status/result backend |
-| `USE_CELERY_INGESTION` | No | `true` in Docker | Enqueue uploads through Celery instead of local task fallback |
+| `USE_CELERY_INGESTION` | No | `true` | Enqueue uploads through Celery |
 | `LANGGRAPH_CHECKPOINTER` | No | `mongo` in Docker, `memory` in settings | Checkpoint backend |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | `http://otel-collector:4317` in Docker | OTEL trace export endpoint |
 | `LANGFUSE_PUBLIC_KEY` | No | None | Enables Langfuse traces when paired with secret key |
@@ -355,7 +355,7 @@ In Docker, uploads use the full queue path:
 FastAPI -> Mongo PENDING -> Redis broker -> Celery worker -> Mongo READY/FAILED
 ```
 
-For manual local development, `USE_CELERY_INGESTION=false` keeps an in-process async fallback available.
+The in-process ingestion path exists only as a local debugging escape hatch. The intended architecture is Celery-first.
 
 ## Document Ingestion Flow
 
@@ -905,9 +905,9 @@ npm install
 npm start
 ```
 
-Manual mode requires your own MongoDB and Redis if you want persistent metadata, Redis cache, Celery ingestion, and Mongo-backed LangGraph checkpoints. Without those services, parts of the backend degrade to memory/no-cache behavior where implemented.
+Manual mode requires your own MongoDB and Redis if you want the same behavior as Docker: persistent metadata, Redis cache, Celery ingestion, and Mongo-backed LangGraph checkpoints. Without those services, parts of the backend degrade to memory/no-cache behavior where implemented.
 
-To use the local in-process ingestion fallback while developing manually:
+To temporarily bypass Celery while debugging ingestion code locally:
 
 ```powershell
 Set-Content -Path backend\.env -Value @"
