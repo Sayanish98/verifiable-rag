@@ -1,0 +1,14 @@
+[
+  {
+    "question": "What was the RBC value in the uploaded report?",
+    "expected_answer_contains": ["RBC"],
+    "expected_document": "Mock_Blood_Report_1.pdf",
+    "expected_page": 1
+  },
+  {
+    "question": "Compare hemoglobin values across the reports.",
+    "expected_answer_contains": ["hemoglobin"],
+    "expected_document": "Mock_Blood_Report_2.pdf",
+    "expected_page": 1
+  }
+]

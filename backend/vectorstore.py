@@ -90,7 +90,8 @@ class VectorStore:
         text = chunk["text"]
         metadata = {
             "doc_name": chunk["doc_name"],
-            "page_number": chunk["page_number"]
+            "page_number": chunk["page_number"],
+            "document_id": chunk.get("document_id", chunk["doc_name"])
         }
         embedding = self.model.encode(text).tolist()
 
@@ -120,11 +121,14 @@ class VectorStore:
 
         # Build list of all candidates with their scores
         all_candidates = []
-        for text, meta in zip(results['documents'][0], results['metadatas'][0]):
+        distances = results.get('distances', [[]])[0] if results.get('distances') else []
+        for index, (text, meta) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
             all_candidates.append({
                 "text": text,
                 "doc_name": meta["doc_name"],
-                "page_number": meta["page_number"]
+                "page_number": meta["page_number"],
+                "document_id": meta.get("document_id", meta["doc_name"]),
+                "score": 1 / (1 + distances[index]) if index < len(distances) else 0.0
             })
         
         # Diversified selection: ensure at least one from each document

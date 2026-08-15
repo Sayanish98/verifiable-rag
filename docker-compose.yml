@@ -1,0 +1,96 @@
+services:
+  api:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      MONGODB_URL: mongodb://mongo:27017
+      MONGODB_DATABASE: verifiable_rag
+      REDIS_URL: redis://redis:6379/0
+      LANGGRAPH_CHECKPOINTER: mongo
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in .env}
+    volumes:
+      - ./backend/vector_db:/app/vector_db
+      - ./backend/uploads:/app/uploads
+    depends_on:
+      - mongo
+      - redis
+      - otel-collector
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      WATCHPACK_POLLING: "true"
+    depends_on:
+      - api
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./backend/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    command: ["--config=/etc/otel-collector-config.yml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./backend/observability/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
+    depends_on:
+      - tempo
+      - loki
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo.yml"]
+    ports:
+      - "3200:3200"
+      - "4319:4317"
+    volumes:
+      - ./backend/observability/tempo.yml:/etc/tempo.yml:ro
+
+  loki:
+    image: grafana/loki:3.3.0
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+
+volumes:
+  mongo_data:
+  grafana_data:
+
